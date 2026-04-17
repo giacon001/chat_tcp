@@ -1,93 +1,135 @@
-# Chat P2P UDP (CLI)
+# Chat P2P Confiavel sobre UDP
 
-Aplicação de mensageria **P2P via UDP** em Python (somente biblioteca padrão), sem GUI.
+Aplicacao de mensageria P2P em Python usando apenas biblioteca padrao.
 
-## Arquitetura atual
+O transporte continua sendo UDP, mas a confiabilidade e implementada na aplicacao
+com ACK, timeout e retransmissao no estilo stop-and-wait (hop-by-hop).
+
+## Arquivos de configuracao obrigatorios
+
+### roteador.config
+
+Formato:
 
 ```text
-Chat_udp/
-├── chat_network.py   # Camada de rede e histórico
-└── chat_gui.py       # Interface CLI (nome legado do arquivo)
+<ID> <Porta> <IP>
 ```
 
-- `chat_network.py`
-  - `Mensagem` e `Vizinho` (dataclasses)
-  - classe `No` com socket UDP, thread de escuta, histórico e encaminhamento
-- `chat_gui.py`
-  - classe `ChatCLI` com comandos de terminal
-  - parser de argumentos e loop principal
+Exemplo:
 
-## Como funciona hoje
+```text
+1 25001 127.0.0.1
+```
 
-- Transporte: UDP (`socket.SOCK_DGRAM`), sem servidor central.
-- Concorrência: uma thread escuta mensagens enquanto a CLI continua recebendo comandos.
-- Histórico por conversa com tipos:
-  - `eu` (mensagem enviada)
-  - `deles` (mensagem recebida)
-  - `fwd` (mensagem recebida e marcada como encaminhada)
-  - `fwd_sent` (nota local de que você encaminhou algo)
-- **Deduplicação de conversa por IP**:
-  - para IPs já conhecidos, a conversa usa sempre o alias local configurado.
-  - isso evita conversas duplicadas quando o outro nó usa nome diferente do seu contato local.
+### enlaces.config
 
-## Estrutura da mensagem
+Formato:
 
-Cada pacote JSON contém:
+```text
+<ID_Origem> <ID_Destino> <Custo>
+```
 
-- `timestamp`
-- `remetente_nome`, `remetente_ip`, `remetente_porta`
-- `dest_nome`, `dest_ip`, `dest_porta`
-- `conteudo`
-- `encaminhado` (bool)
-- `encaminhado_por` (str opcional)
+Exemplo:
 
-## Execução
+```text
+1 2 10
+```
 
-Uso:
+Observacao: os enlaces sao tratados como bidirecionais.
+
+## Inicializacao
+
+Cada no deve ser iniciado com o ID do roteador:
 
 ```bash
-python3 chat_gui.py <nome> <ip> <porta> <viz1_nome> <viz1_ip> <viz1_porta> [<viz2_nome> <viz2_ip> <viz2_porta> ...]
+python3 chat_gui.py <ID_roteador>
 ```
 
-Exemplo (3 nós):
+Exemplo com 5 terminais:
 
 ```bash
 # Terminal 1
-python3 chat_gui.py No_A 192.168.1.10 5001 No_B 192.168.1.11 5002 No_C 192.168.1.12 5003
+python3 chat_gui.py 1
 
 # Terminal 2
-python3 chat_gui.py No_B 192.168.1.11 5002 No_A 192.168.1.10 5001 No_C 192.168.1.12 5003
+python3 chat_gui.py 2
 
 # Terminal 3
-python3 chat_gui.py No_C 192.168.1.12 5003 No_B 192.168.1.11 5002 No_A 192.168.1.10 5001 
-```
-Local (3 nós):
+python3 chat_gui.py 3
 
-```bash
-# Terminal 1
-python3 chat_gui.py No_A 127.0.0.1 5001 No_B 127.0.0.1 5002 No_C 127.0.0.1 5003
+# Terminal 4
+python3 chat_gui.py 4
 
-# Terminal 2
-python3 chat_gui.py No_B 127.0.0.1 5002 No_A 127.0.0.1 5001 No_C 127.0.0.1 5003
-
-# Terminal 3
-python3 chat_gui.py No_C 127.0.0.1 5003 No_B 127.0.0.1 5002 No_A 127.0.0.1 5001 
+# Terminal 5
+python3 chat_gui.py 5
 ```
 
-## Comandos disponíveis
+## Roteamento
 
-- `/ajuda` — mostra ajuda
-- `/conversas` — lista conversas e não lidas
-- `/abrir <nome>` — define conversa ativa
-- `/historico` — mostra histórico da conversa ativa
-- `/enviar <texto>` — envia para o vizinho da conversa ativa
-- `/encaminhar <indice> <destino>` — encaminha mensagem recebida para outro vizinho
-- `/sair` — encerra o nó
+- Topologia estatica carregada dos arquivos.
+- Cada no possui visao global da rede.
+- Dijkstra e usado para calcular menor custo.
+- Tabela de encaminhamento: destino -> proximo_hop.
 
-Atalho: texto sem `/` é tratado como `/enviar <texto>`.
+## Confiabilidade (stop-and-wait)
 
-## Limitações atuais
+- Apenas 1 pacote de dados por vez e enviado por no.
+- Cada hop envia ACK ao hop anterior quando recebe um pacote valido.
+- Se o ACK nao chega dentro do timeout, o pacote e reenviado.
+- Retransmissao segue no mesmo caminho enquanto a topologia for estatica.
 
-- Envio direto (`/enviar`) só funciona para vizinho direto configurado.
-- `/encaminhar` só aceita mensagens recebidas (`deles` ou `fwd`).
-- UDP não garante entrega, ordem ou confirmação.
+## Simulacao de falhas
+
+- Cada roteador descarta aleatoriamente 10% dos pacotes de dados.
+- ACKs nao entram nessa perda simulada.
+- Pacotes descartados nao geram ACK.
+
+## Restricoes de payload
+
+- Mensagens de texto limitadas a 100 caracteres.
+- Cada mensagem e enviada em um unico pacote.
+
+## Logs locais
+
+Cada no grava um arquivo em `logs/roteador_<ID>.log` com entradas cronologicas das categorias:
+
+- Enviadas
+- Encaminhadas
+- Recebidas
+- Descartes
+
+## Rastreabilidade no console
+
+Nos processamentos de envio/encaminhamento, o no imprime status com sequencia e destino.
+
+Exemplo:
+
+```text
+Roteador [2] encaminhando mensagem (Seq: 7) para o destino 5 via 4
+```
+
+## Comandos da CLI
+
+- `/ajuda`
+- `/conversas`
+- `/abrir <id>`
+- `/historico`
+- `/enviar <texto>`
+- `/enviarpara <id> <texto>`
+- `/rotas`
+- `/sair`
+
+Atalho: texto sem `/` equivale a `/enviar <texto>` para a conversa ativa.
+
+## Estrutura principal
+
+```text
+Chat_TCP/
+├── chat_gui.py         # CLI e bootstrap por ID
+├── chat_network.py     # Rede UDP + ACK/reenvio + stop-and-wait
+├── config_loader.py    # Parser de roteador.config/enlaces.config
+├── routing.py          # Dijkstra e tabela de encaminhamento
+├── local_logger.py     # Logs locais por categoria
+├── roteador.config     # Mapa ID -> porta/IP
+└── enlaces.config      # Topologia e custos
+```
